@@ -31,6 +31,15 @@ try:
 except ModuleNotFoundError:
     PLOTLY_OK = False
 
+# openpyxl powers BOTH reading uploaded .xlsx/.xls files AND writing the Excel
+# download. If it fails to import (e.g. a broken Cloud build environment),
+# the app must still work for CSV upload/download — it must never crash.
+try:
+    import openpyxl  # noqa: F401
+    OPENPYXL_OK = True
+except ModuleNotFoundError:
+    OPENPYXL_OK = False
+
 # -----------------------------------------------------------------------------
 # PAGE CONFIG
 # -----------------------------------------------------------------------------
@@ -264,6 +273,13 @@ def read_uploaded_file(uploaded_file) -> pd.DataFrame:
     if name.endswith(".csv"):
         df = pd.read_csv(uploaded_file)
     else:
+        if not OPENPYXL_OK:
+            raise RuntimeError(
+                "This server's Python environment is missing the 'openpyxl' package, "
+                "so Excel (.xlsx/.xls) files can't be read right now. "
+                "Workaround: open this file in Excel/Google Sheets and re-save/export it "
+                "as .csv, then upload the .csv instead — CSV upload does not need openpyxl."
+            )
         df = pd.read_excel(uploaded_file, sheet_name=0)
     return normalize_columns(df)
 
@@ -431,7 +447,11 @@ with st.sidebar:
             st.session_state["df_raw"] = read_uploaded_file(uploaded_file)
             st.session_state["data_source"] = f"Uploaded file: {uploaded_file.name}"
         except Exception as e:
-            st.error(f"Could not read file: {e}")
+            st.error(
+                f"File received, but it could not be parsed: {e}\n\n"
+                "(The file chip above only confirms it was transferred to the app — "
+                "this error means the server-side step that opens/reads it failed.)"
+            )
 
     if load_sample:
         st.session_state["df_raw"] = generate_sample_data()
@@ -643,18 +663,50 @@ with tab_results:
                 use_container_width=True,
             )
         with c2:
-            excel_bytes = df_to_excel_bytes({
-                "Section_Summary": display_summary,
-                "Defect_Detail": detail_df if detail_df is not None else pd.DataFrame(),
-                "Raw_Input": df_raw,
-            })
-            st.download_button(
-                "⬇️ Download Full Results (Excel, 3 sheets)",
-                data=excel_bytes,
-                file_name=f"pavement_analysis_results_{ts}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
+            if not OPENPYXL_OK:
+                st.button(
+                    "⬇️ Download Full Results (Excel) — unavailable",
+                    disabled=True, use_container_width=True,
+                    help="The 'openpyxl' package isn't available in this server environment right now.",
+                )
+                st.caption(
+                    "⚠️ Excel download is temporarily unavailable on this server "
+                    "(missing 'openpyxl' package) — use the CSV download on the left instead. "
+                    "See the note at the bottom of this page for how to fix this on Streamlit Cloud."
+                )
+            else:
+                try:
+                    excel_bytes = df_to_excel_bytes({
+                        "Section_Summary": display_summary,
+                        "Defect_Detail": detail_df if detail_df is not None else pd.DataFrame(),
+                        "Raw_Input": df_raw,
+                    })
+                    st.download_button(
+                        "⬇️ Download Full Results (Excel, 3 sheets)",
+                        data=excel_bytes,
+                        file_name=f"pavement_analysis_results_{ts}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                    )
+                except Exception as e:
+                    st.caption(f"⚠️ Excel export failed ({e}). Use the CSV download on the left instead.")
+
+        if not OPENPYXL_OK:
+            with st.expander("ℹ️ Why is Excel upload/download unavailable? (click to view)"):
+                st.markdown(
+                    "This server's Python environment is missing the **openpyxl** package, "
+                    "which both Excel *upload* and Excel *download* depend on. This is almost "
+                    "always a deployment/server-side issue, not a problem with your data.\n\n"
+                    "**If you're the app owner (Streamlit Community Cloud):** this is a known, "
+                    "currently active platform issue where Cloud forces a very new Python version "
+                    "(3.14) on new deployments, which breaks the install of several packages. "
+                    "The fix is to **delete the app and redeploy it**, choosing an older, stable "
+                    "Python version (e.g. 3.11 or 3.12) in the **'Advanced settings'** dialog "
+                    "*before* clicking Deploy — Python version can only be set at deploy time, "
+                    "not changed afterwards. Then reboot/redeploy with the same `requirements.txt`.\n\n"
+                    "**In the meantime:** CSV upload and CSV download both work normally and need "
+                    "no extra packages — use CSV instead of Excel for now."
+                )
 
 # =============================================================================
 # TAB: CHARTS
