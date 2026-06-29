@@ -19,9 +19,17 @@ from datetime import datetime
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
+
+# Plotly is an optional, "nice-to-have" charting dependency. If the deployment
+# environment fails to install it for any reason (e.g. requirements.txt not
+# picked up yet on Streamlit Cloud), the app must NOT crash — it should fall
+# back to Streamlit's built-in charts instead.
+try:
+    import plotly.express as px
+    PLOTLY_OK = True
+except ModuleNotFoundError:
+    PLOTLY_OK = False
 
 # -----------------------------------------------------------------------------
 # PAGE CONFIG
@@ -218,9 +226,10 @@ def lookup_treatment(defect_type, severity):
 
 @st.cache_data
 def generate_sample_data() -> pd.DataFrame:
-    """Synthetic demo dataset spanning Very Good -> Poor conditions, in the
-    exact 5-column input format required by the assignment brief. For
-    teaching/demo purposes only — not the official lecturer dataset."""
+    """Synthetic demo dataset covering 10 road sections (S1-S10) spanning all
+    four condition classes (Very Good -> Poor), in the exact 5-column input
+    format required by the assignment brief. For teaching/demo purposes only
+    — not the official lecturer dataset."""
     rows = [
         # Section, Defect Type, Severity, Area %, IRI (m/km)
         ("S1", "Longitudinal Crack", "Low", 4, 1.7),
@@ -241,6 +250,11 @@ def generate_sample_data() -> pd.DataFrame:
         ("S7", "Bleeding/Flushing", "Medium", 4, 2.2),
         ("S8", "Potholes", "Low", 3, 2.6),
         ("S8", "Patching (Failed)", "Medium", 4, 2.6),
+        ("S9", "Raveling", "Medium", 8, 3.3),
+        ("S9", "Rut/Rutting", "Medium", 10, 3.3),
+        ("S9", "Bleeding/Flushing", "High", 8, 3.3),
+        ("S10", "Alligator (Fatigue) Crack", "High", 12, 4.6),
+        ("S10", "Patching (Failed)", "High", 10, 4.6),
     ]
     return pd.DataFrame(rows, columns=CANONICAL_COLS)
 
@@ -579,12 +593,15 @@ with tab_dash:
             st.markdown("##### Condition Rating Distribution")
             dist = summary_df["Combined Condition Rating"].value_counts().reset_index()
             dist.columns = ["Condition", "Count"]
-            fig = px.pie(
-                dist, names="Condition", values="Count", hole=0.45,
-                color="Condition", color_discrete_map=CONDITION_COLORS,
-            )
-            fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=340)
-            st.plotly_chart(fig, use_container_width=True)
+            if PLOTLY_OK:
+                fig = px.pie(
+                    dist, names="Condition", values="Count", hole=0.45,
+                    color="Condition", color_discrete_map=CONDITION_COLORS,
+                )
+                fig.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=340)
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.bar_chart(dist.set_index("Condition")["Count"])
 
 # =============================================================================
 # TAB: DETAILED RESULTS
@@ -647,12 +664,21 @@ with tab_charts:
     if summary_df is None or summary_df.empty:
         st.info("Load data to see charts.")
     else:
+        if not PLOTLY_OK:
+            st.warning(
+                "Plotly isn't installed in this environment, so charts below are shown "
+                "using Streamlit's simplified built-in charts (no colour-by-condition). "
+                "Add `plotly` to requirements.txt and reboot the app for the full "
+                "interactive charts.",
+                icon="⚠️",
+            )
+
         # --- PCI by Section ---
         st.markdown("##### PCI by Section")
         pci_chart_df = summary_df.dropna(subset=["PCI"])
         if pci_chart_df.empty:
             st.caption("No PCI data available to chart.")
-        else:
+        elif PLOTLY_OK:
             fig1 = px.bar(
                 pci_chart_df, x="Section", y="PCI", color="PCI Condition",
                 color_discrete_map=CONDITION_COLORS, text="PCI",
@@ -664,13 +690,15 @@ with tab_charts:
             fig1.update_traces(texttemplate="%{text:.1f}", textposition="outside")
             fig1.update_layout(yaxis_range=[0, 105], height=380, margin=dict(t=30, b=10))
             st.plotly_chart(fig1, use_container_width=True)
+        else:
+            st.bar_chart(pci_chart_df.set_index("Section")["PCI"])
 
         # --- IRI by Section ---
         st.markdown("##### IRI by Section")
         iri_chart_df = summary_df.dropna(subset=["Avg IRI (m/km)"])
         if iri_chart_df.empty:
             st.caption("No IRI data available to chart.")
-        else:
+        elif PLOTLY_OK:
             fig2 = px.bar(
                 iri_chart_df, x="Section", y="Avg IRI (m/km)", color="IRI Condition",
                 color_discrete_map=CONDITION_COLORS, text="Avg IRI (m/km)",
@@ -682,6 +710,8 @@ with tab_charts:
             fig2.update_traces(texttemplate="%{text:.2f}", textposition="outside")
             fig2.update_layout(height=380, margin=dict(t=30, b=10))
             st.plotly_chart(fig2, use_container_width=True)
+        else:
+            st.bar_chart(iri_chart_df.set_index("Section")["Avg IRI (m/km)"])
 
         colA, colB = st.columns(2)
         with colA:
@@ -692,29 +722,38 @@ with tab_charts:
                 defect_counts = (
                     detail_df.groupby(["Defect Type", "Severity"]).size().reset_index(name="Count")
                 )
-                fig3 = px.bar(
-                    defect_counts, x="Defect Type", y="Count", color="Severity",
-                    color_discrete_map={"Low": "#2E7D32", "Medium": "#F9A825", "High": "#C62828"},
-                    barmode="stack",
-                )
-                fig3.update_layout(height=380, margin=dict(t=10, b=10), xaxis_tickangle=-30)
-                st.plotly_chart(fig3, use_container_width=True)
+                if PLOTLY_OK:
+                    fig3 = px.bar(
+                        defect_counts, x="Defect Type", y="Count", color="Severity",
+                        color_discrete_map={"Low": "#2E7D32", "Medium": "#F9A825", "High": "#C62828"},
+                        barmode="stack",
+                    )
+                    fig3.update_layout(height=380, margin=dict(t=10, b=10), xaxis_tickangle=-30)
+                    st.plotly_chart(fig3, use_container_width=True)
+                else:
+                    pivot = defect_counts.pivot_table(
+                        index="Defect Type", columns="Severity", values="Count", fill_value=0
+                    )
+                    st.bar_chart(pivot)
 
         with colB:
             st.markdown("##### Condition Rating Distribution")
             dist2 = summary_df["Combined Condition Rating"].value_counts().reset_index()
             dist2.columns = ["Condition", "Count"]
-            fig4 = px.bar(
-                dist2, x="Condition", y="Count", color="Condition",
-                color_discrete_map=CONDITION_COLORS, text="Count",
-            )
-            fig4.update_layout(height=380, margin=dict(t=10, b=10), showlegend=False)
-            st.plotly_chart(fig4, use_container_width=True)
+            if PLOTLY_OK:
+                fig4 = px.bar(
+                    dist2, x="Condition", y="Count", color="Condition",
+                    color_discrete_map=CONDITION_COLORS, text="Count",
+                )
+                fig4.update_layout(height=380, margin=dict(t=10, b=10), showlegend=False)
+                st.plotly_chart(fig4, use_container_width=True)
+            else:
+                st.bar_chart(dist2.set_index("Condition")["Count"])
 
         st.markdown("##### Defects by Section (stacked)")
         if detail_df is None or detail_df.empty:
             st.caption("No defect-level data available to chart.")
-        else:
+        elif PLOTLY_OK:
             by_section = detail_df.groupby(["Section", "Defect Type"]).size().reset_index(name="Count")
             fig5 = px.bar(
                 by_section, x="Section", y="Count", color="Defect Type", barmode="stack",
@@ -722,6 +761,10 @@ with tab_charts:
             )
             fig5.update_layout(height=380, margin=dict(t=10, b=10))
             st.plotly_chart(fig5, use_container_width=True)
+        else:
+            by_section = detail_df.groupby(["Section", "Defect Type"]).size().reset_index(name="Count")
+            pivot2 = by_section.pivot_table(index="Section", columns="Defect Type", values="Count", fill_value=0)
+            st.bar_chart(pivot2)
 
 # =============================================================================
 # TAB: METHODOLOGY & ASSUMPTIONS
